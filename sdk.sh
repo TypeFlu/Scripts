@@ -2,95 +2,137 @@
 
 set -e
 
-# --- COLOR DEFINITIONS ---
+# ──────────────────────────────────────────────────────────────── #
+# 🎨 Terminal Colors
+# ──────────────────────────────────────────────────────────────── #
 GREEN="\033[1;32m"
 YELLOW="\033[1;33m"
 RED="\033[1;31m"
 BLUE="\033[1;34m"
-NC="\033[0m" # No Color
+CYAN="\033[1;36m"
+NC="\033[0m"
 
-step() { echo -e "${BLUE}==>${NC} ${GREEN}$1${NC}"; }
-warn() { echo -e "${YELLOW}Warning:${NC} $1"; }
-error() { echo -e "${RED}Error:${NC} $1"; }
-progress_bar() {
-  local pid=$!
-  local delay=0.1
-  local spinstr='|/-\'
-  echo -ne " "
-  while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-    local temp=${spinstr#?}
-    printf " [%c]  " "$spinstr"
-    local spinstr=$temp${spinstr%"$temp"}
-    sleep $delay
-    printf "\b\b\b\b\b\b"
-  done
-  echo -ne "\r"
+print_banner() {
+  echo -e "${CYAN}"
+  echo "═══════════════════════════════════════════════════"
+  echo " 🧰 Android CLI Dev Setup for Ubuntu (Pro Edition)"
+  echo "═══════════════════════════════════════════════════"
+  echo -e "${NC}"
 }
 
-# --- DETECT SHELL & RC FILE ---
-if [[ "$SHELL" =~ "zsh" ]]; then
-  RC_FILE="$HOME/.zshrc"
+prompt_input() {
+  local var_name="$1"
+  local message="$2"
+  local default="$3"
+
+  printf "${YELLOW}${message}${NC} "
+  if [[ -n "$default" ]]; then
+    printf "[Default: ${GREEN}${default}${NC}]: "
+  fi
+  read -r input
+  eval "$var_name=\"\${input:-$default}\""
+}
+
+confirm() {
+  read -p "$(echo -e "${YELLOW}❯❯ $1 (y/n):${NC} ")" -n 1 -r
+  echo
+  [[ $REPLY =~ ^[Yy]$ ]]
+}
+
+add_to_shell_profile() {
+  local content="$1"
+  local shellrc="$HOME/.bashrc"
+  [[ "$SHELL" =~ "zsh" ]] && shellrc="$HOME/.zshrc"
+  grep -qxF "$content" "$shellrc" || echo "$content" >> "$shellrc"
+}
+
+# ──────────────────────────────────────────────────────────────── #
+# 🚀 Start Setup
+# ──────────────────────────────────────────────────────────────── #
+
+print_banner
+
+# Step 1: Update and install essentials
+echo -e "${BLUE}🔧 Updating packages and installing essentials...${NC}"
+sudo apt-get update -y && sudo apt-get install -y wget curl unzip build-essential jq
+
+# Step 2: JAVA Setup (Eclipse Temurin)
+echo -e "\n${CYAN}🧠 Java Setup${NC}"
+prompt_input JDK_URL "Paste the JDK (Temurin) tar.gz link (or leave blank for latest):" ""
+
+if [[ -z "$JDK_URL" ]]; then
+  VERSION=$(curl -s https://api.adoptium.net/v3/info/release_names?image_type=jdk | jq -r '.[]' | grep hotspot | head -1)
+  JDK_URL=$(curl -s "https://api.adoptium.net/v3/assets/latest/${VERSION//jdk-/}/ga?architecture=x64&heap_size=normal&image_type=jdk&os=linux" | jq -r '.[0].binary.package.link')
+  echo -e "${GREEN}✅ Using latest JDK from Eclipse Temurin${NC}\n▶️ $JDK_URL"
 else
-  RC_FILE="$HOME/.bashrc"
+  echo -e "${GREEN}✅ Using custom JDK link${NC}"
 fi
 
-# --- STEP 1: UPDATE SYSTEM ---
-step "Updating system packages"
-sudo apt-get update -y & progress_bar
-sudo apt-get upgrade -y & progress_bar
-
-# --- STEP 2: INSTALL BUILD TOOLS ---
-step "Installing build essentials and wget, unzip"
-sudo apt-get install -y build-essential wget unzip curl & progress_bar
-
-# --- STEP 3: INSTALL LATEST ECLIPSE TEMURIN JDK ---
-step "Installing latest Eclipse Temurin JDK"
-TEMURIN_LATEST=$(curl -s https://api.adoptium.net/v3/info/release_names?image_type=jdk | grep -m1 -o 'jdk-[0-9]\+\.[0-9]\+\.[0-9]\+_hotspot')
-TEMURIN_URL=$(curl -s "https://api.adoptium.net/v3/assets/latest/$(echo $TEMURIN_LATEST | cut -d- -f2)/ga?architecture=x64&heap_size=normal&image_type=jdk&os=linux" | grep -oP '"binary_link":"\K[^"]*')
-wget -qO /tmp/temurin.tar.gz "$TEMURIN_URL" & progress_bar
-sudo mkdir -p /opt/java
-sudo tar -xzf /tmp/temurin.tar.gz -C /opt/java & progress_bar
-JAVA_DIR=$(find /opt/java -type d -name "jdk*" | head -n 1)
-echo "export JAVA_HOME=$JAVA_DIR" >> "$RC_FILE"
+echo -e "${BLUE}📦 Installing JDK...${NC}"
+mkdir -p /opt/java
+wget -qO /tmp/jdk.tar.gz "$JDK_URL"
+sudo tar -xf /tmp/jdk.tar.gz -C /opt/java/
+JAVA_DIR=$(find /opt/java -maxdepth 1 -type d -name "jdk*" | head -n 1)
+add_to_shell_profile "export JAVA_HOME=$JAVA_DIR"
+add_to_shell_profile 'export PATH=$JAVA_HOME/bin:$PATH'
 export JAVA_HOME="$JAVA_DIR"
-echo 'export PATH=$JAVA_HOME/bin:$PATH' >> "$RC_FILE"
 export PATH="$JAVA_HOME/bin:$PATH"
 
-# --- STEP 4: INSTALL ANDROID COMMAND LINE TOOLS ---
-ANDROID_SDK_ROOT="$HOME/Android/Sdk"
-mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-step "Getting latest Android Command Line Tools"
-TOOLS_URL=$(curl -s https://developer.android.com/studio | grep -oP 'https://dl.google.com/android/repository/commandlinetools-linux-[^"]+' | head -1)
-wget -qO /tmp/commandlinetools.zip "$TOOLS_URL" & progress_bar
-unzip -qo /tmp/commandlinetools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools" & progress_bar
-mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+# Step 3: Android CLI Tools
+echo -e "\n${CYAN}🤖 Android Command Line Tools Setup${NC}"
+prompt_input ANDROID_URL "Paste Android Command Line Tools (Linux) zip link (or leave blank for latest):" ""
 
-# --- STEP 5: SET ENVIRONMENT VARIABLES ---
-echo "export ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$RC_FILE"
-echo "export ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$RC_FILE"
-echo 'export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH' >> "$RC_FILE"
-export ANDROID_HOME="$ANDROID_SDK_ROOT"
-export ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT"
+if [[ -z "$ANDROID_URL" ]]; then
+  ANDROID_URL=$(curl -s https://developer.android.com/studio | grep -oP 'https://dl.google.com/android/repository/commandlinetools-linux-[^"]+' | head -1)
+  echo -e "${GREEN}✅ Using latest Android CLI tools${NC}\n▶️ $ANDROID_URL"
+else
+  echo -e "${GREEN}✅ Using custom Android CLI tools link${NC}"
+fi
+
+ANDROID_HOME="$HOME/Android/Sdk"
+mkdir -p "$ANDROID_HOME/cmdline-tools"
+wget -qO /tmp/cli.zip "$ANDROID_URL"
+unzip -qq /tmp/cli.zip -d "$ANDROID_HOME/cmdline-tools"
+mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+
+# Set Android Environment Vars
+add_to_shell_profile "export ANDROID_HOME=$ANDROID_HOME"
+add_to_shell_profile "export ANDROID_SDK_ROOT=$ANDROID_HOME"
+add_to_shell_profile 'export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH'
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
-# --- STEP 6: INSTALL SDK PACKAGES & LICENSES ---
-step "Installing Android SDK Tools, Platform-tools, Build-tools"
-yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-34" "build-tools;34.0.0" & progress_bar
-yes | sdkmanager --licenses & progress_bar
+# Step 4: Gradle Setup
+echo -e "\n${CYAN}📦 Gradle Setup${NC}"
+prompt_input GRADLE_VERSION "Enter Gradle version (or leave blank for latest):" ""
+if [[ -z "$GRADLE_VERSION" ]]; then
+  GRADLE_VERSION=$(curl -s https://services.gradle.org/versions/current | jq -r .version)
+fi
+GRADLE_ZIP="gradle-$GRADLE_VERSION-bin.zip"
+GRADLE_URL="https://services.gradle.org/distributions/$GRADLE_ZIP"
+echo -e "${GREEN}✅ Getting Gradle $GRADLE_VERSION${NC}"
 
-# --- STEP 7: INSTALL LATEST GRADLE ---
-step "Installing latest Gradle"
-GRADLE_LATEST=$(curl -s https://services.gradle.org/versions/current | grep -o '"version":"[^"]*' | head -1 | cut -d'"' -f4)
-GRADLE_ZIP="gradle-$GRADLE_LATEST-bin.zip"
-wget -qO /tmp/$GRADLE_ZIP "https://services.gradle.org/distributions/$GRADLE_ZIP" & progress_bar
-sudo unzip -qo /tmp/$GRADLE_ZIP -d /opt/gradle & progress_bar
-echo "export PATH=/opt/gradle/gradle-$GRADLE_LATEST/bin:\$PATH" >> "$RC_FILE"
-export PATH="/opt/gradle/gradle-$GRADLE_LATEST/bin:$PATH"
+wget -qO /tmp/$GRADLE_ZIP "$GRADLE_URL"
+sudo unzip -qo /tmp/$GRADLE_ZIP -d /opt/gradle
+add_to_shell_profile "export PATH=/opt/gradle/gradle-$GRADLE_VERSION/bin:\$PATH"
+export PATH="/opt/gradle/gradle-$GRADLE_VERSION/bin:$PATH"
 
-# --- STEP 8: FINAL STATUS ---
-step "Validating Installation"
-echo -e "${GREEN}✔ JAVA:$(java -version 2>&1 | head -1)${NC}"
-echo -e "${GREEN}✔ Android SDK:$(sdkmanager --version)${NC}"
-echo -e "${GREEN}✔ Gradle:$(gradle -v | grep Gradle)${NC}"
-echo -e "${BLUE}All done! Open a new terminal or source your rc file for changes to apply.${NC}"
+# Step 5: Android SDK packages
+echo -e "\n${CYAN}📥 Installing Android SDK packages${NC}"
+yes | sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+yes | sdkmanager --licenses
 
+# Step 6: Done!
+echo -e "\n${GREEN}✅ All set! Restart your terminal or source your profile:${NC}"
+if [[ "$SHELL" =~ "zsh" ]]; then
+  echo '    source ~/.zshrc'
+else
+  echo '    source ~/.bashrc'
+fi
+
+echo -e "\n${BLUE}🔍 Installed Tools:${NC}"
+echo -e "${GREEN}▶ java -version${NC}"
+java -version
+echo -e "${GREEN}▶ gradle -v${NC}"
+gradle -v
+echo -e "${GREEN}▶ sdkmanager --version${NC}"
+sdkmanager --version
